@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.4.33213.308
+# Visual Studio Version 18
+VisualStudioVersion = 18.2.11415.280 d18.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "C++ Examples", "C++ Examples", "{6702CF86-8BD5-48AB-A6C3-5A4BED11F5B8}"
 EndProject
@@ -86,6 +86,11 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "StereoGPIO", "StereoGPIO\StereoGPIO_vs2022.vcxproj", "{8D1A0E75-891C-4A08-BB55-260B99BFE41E}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "StereoAcquisition_QuickSpin", "StereoAcquisition_QuickSpin\StereoAcquisition_QuickSpin_vs2022.vcxproj", "{8C3D1DDB-3CDA-488D-B67A-C5FDF0548E3E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Elementos de la solución", "Elementos de la solución", "{A06F5CE5-0C27-44DC-B682-C051D42E1264}"
+	ProjectSection(SolutionItems) = preProject
+		Directory.Build.props = Directory.Build.props
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

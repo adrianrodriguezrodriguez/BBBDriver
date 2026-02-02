@@ -1,0 +1,25 @@
+<Project>
+	<PropertyGroup>
+		<!-- Estamos en ...\Spinnaker\src\, subimos a ...\Spinnaker\ -->
+		<SPIN_ROOT>$(MSBuildThisFileDirectory)..\</SPIN_ROOT>
+	</PropertyGroup>
+
+	<ItemDefinitionGroup>
+		<ClCompile>
+			<AdditionalIncludeDirectories>$(SPIN_ROOT)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+			<LanguageStandard>stdcpp17</LanguageStandard>
+		</ClCompile>
+
+		<Link>
+			<AdditionalLibraryDirectories>$(SPIN_ROOT)lib64\vs2015;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+
+			<AdditionalDependencies Condition="'$(Configuration)'=='Release'">
+				Spinnaker_v140.lib;SpinnakerC_v140.lib;%(AdditionalDependencies)
+			</AdditionalDependencies>
+
+			<AdditionalDependencies Condition="'$(Configuration)'=='Debug'">
+				Spinnakerd_v140.lib;SpinnakerCd_v140.lib;%(AdditionalDependencies)
+			</AdditionalDependencies>
+		</Link>
+	</ItemDefinitionGroup>
+</Project>
