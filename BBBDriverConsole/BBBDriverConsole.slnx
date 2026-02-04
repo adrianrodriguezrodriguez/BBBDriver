@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="BBBDriverConsole/BBBDriverConsole.vcxproj" Id="966fd274-aac8-4dfb-ad6a-2be5a3191acb" />
+</Solution>
