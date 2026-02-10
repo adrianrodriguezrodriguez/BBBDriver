@@ -40,6 +40,12 @@ public:
     BBBDriver() = default;
     ~BBBDriver();
 
+    BBBDriver(const BBBDriver&) = delete;
+    BBBDriver& operator=(const BBBDriver&) = delete;
+
+    BBBDriver(BBBDriver&& other) noexcept;
+    BBBDriver& operator=(BBBDriver&& other) noexcept;
+
     bool OpenBySerial(Spinnaker::CameraList& cams, const std::string& serial);
     bool OpenFirstStereoSkip(Spinnaker::CameraList& cams, const std::string& serialToSkip);
 

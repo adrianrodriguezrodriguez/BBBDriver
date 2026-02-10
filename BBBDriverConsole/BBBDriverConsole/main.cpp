@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <vector>
 #include <algorithm>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -171,8 +172,9 @@ int main()
     BBBAppConfig cfg;
     if (!BBBConfig::LoadIni(iniPath.string(), cfg))
     {
-        std::cout << "ERROR no pude leer " << iniPath.string() << "\n";
-        return 1;
+        std::cout << "INI no existe o no se pudo leer, lo creo en " << iniPath.string() << "\n";
+        // tiramos con defaults y guardamos para que el usuario lo edite
+        BBBConfig::SaveIni(iniPath.string(), cfg);
     }
 
     if (cfg.maxCameras > 3) cfg.maxCameras = 3;
@@ -238,7 +240,7 @@ int main()
             ActiveCam a;
             a.cfg = &c;
             a.available = false;
-            act.push_back(a);
+            act.push_back(std::move(a));
             continue;
         }
 
@@ -258,7 +260,7 @@ int main()
         if (a.available)
             usedSerials.push_back(c.serial);
 
-        act.push_back(a);
+        act.push_back(std::move(a));
     }
 
     BBBConfig::SaveIni(iniPath.string(), cfg);

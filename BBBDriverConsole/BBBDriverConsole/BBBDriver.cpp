@@ -309,6 +309,31 @@ BBBDriver::~BBBDriver()
     Close();
 }
 
+
+BBBDriver::BBBDriver(BBBDriver&& other) noexcept
+{
+    acquiring = other.acquiring;
+    cam = other.cam;
+
+    other.acquiring = false;
+    other.cam = nullptr;
+}
+
+BBBDriver& BBBDriver::operator=(BBBDriver&& other) noexcept
+{
+    if (this == &other) return *this;
+
+    Close();
+
+    acquiring = other.acquiring;
+    cam = other.cam;
+
+    other.acquiring = false;
+    other.cam = nullptr;
+
+    return *this;
+}
+
 // TELEDYNE usamos nodos GenICam para setear enumeraciones
 bool BBBDriver::SetEnumAsString(INodeMap& nodeMap, const char* name, const char* value)
 {
@@ -355,17 +380,149 @@ float BBBDriver::BaselineToMeters(float baselineMaybeMm)
     return b;
 }
 
-// TELEDYNE validamos payloads oficiales de rectified y disparity
-bool BBBDriver::ValidateSetHasRectDisp(const ImageList& set)
+// ARR clasificacion por PixelFormat, mas fiable que bpp
+static bool IsRectifiedPF(Spinnaker::PixelFormatEnums pf)
 {
-    ImagePtr disp = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_DISPARITY_SENSOR1);
-    ImagePtr rect = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_RECTIFIED_SENSOR1);
+    using namespace Spinnaker;
 
-    if (!disp || !rect) return false;
-    if (disp->IsIncomplete() || rect->IsIncomplete()) return false;
-    if (!disp->GetData() || !rect->GetData()) return false;
+    switch (pf)
+    {
+    case PixelFormat_Mono8:
+    case PixelFormat_BayerRG8:
+    case PixelFormat_BayerGB8:
+    case PixelFormat_BayerGR8:
+    case PixelFormat_BayerBG8:
+    case PixelFormat_RGB8Packed:
+
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool IsDisparityPF(Spinnaker::PixelFormatEnums pf)
+{
+    using namespace Spinnaker;
+
+    switch (pf)
+    {
+        // Lo mas tipico en Bumblebee
+    case PixelFormat_Mono16:
+        return true;
+
+        // Algunos modelos pueden dar coord3D directamente
+    case PixelFormat_Coord3D_ABC32f:
+    case PixelFormat_Coord3D_AC32f:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+static void DumpSetInfo(const Spinnaker::ImageList& set, const char* tag)
+{
+    std::cout << tag << " set size " << set.GetSize() << "\n";
+    for (unsigned int i = 0; i < set.GetSize(); ++i)
+    {
+        Spinnaker::ImagePtr img = set.GetByIndex(i);
+        if (!img)
+        {
+            std::cout << "  [" << i << "] null\n";
+            continue;
+        }
+
+        std::cout
+            << "  [" << i << "] "
+            << "w " << img->GetWidth()
+            << " h " << img->GetHeight()
+            << " bpp " << img->GetBitsPerPixel()
+            << " pf " << (int)img->GetPixelFormat()
+            << " incomplete " << (img->IsIncomplete() ? "si" : "no")
+            << "\n";
+    }
+}
+
+static Spinnaker::ImagePtr FindRectified(const Spinnaker::ImageList& set)
+{
+    using namespace Spinnaker;
+
+    // 1) intento por PixelFormat tipico de imagen 2D
+    for (unsigned int i = 0; i < set.GetSize(); ++i)
+    {
+        ImagePtr img = set.GetByIndex(i);
+        if (!img || img->IsIncomplete()) continue;
+        if (IsRectifiedPF(img->GetPixelFormat())) return img;
+    }
+
+    // 2) fallback: cogemos la primera que NO sea disparity
+    for (unsigned int i = 0; i < set.GetSize(); ++i)
+    {
+        ImagePtr img = set.GetByIndex(i);
+        if (!img || img->IsIncomplete()) continue;
+        if (!IsDisparityPF(img->GetPixelFormat())) return img;
+    }
+
+    // 3) ultimo fallback: la primera valida
+    for (unsigned int i = 0; i < set.GetSize(); ++i)
+    {
+        ImagePtr img = set.GetByIndex(i);
+        if (!img || img->IsIncomplete()) continue;
+        return img;
+    }
+
+    return ImagePtr();
+}
+
+static Spinnaker::ImagePtr FindDisparity(const Spinnaker::ImageList& set)
+{
+    using namespace Spinnaker;
+
+    // 1) intento por PixelFormat tipico de disparity/16bpp/coord3d
+    for (unsigned int i = 0; i < set.GetSize(); ++i)
+    {
+        ImagePtr img = set.GetByIndex(i);
+        if (!img || img->IsIncomplete()) continue;
+        if (IsDisparityPF(img->GetPixelFormat())) return img;
+    }
+
+    // 2) fallback: si hay 2+ imagenes, cogemos la que no sea rectified
+    ImagePtr rect = FindRectified(set);
+    for (unsigned int i = 0; i < set.GetSize(); ++i)
+    {
+        ImagePtr img = set.GetByIndex(i);
+        if (!img || img->IsIncomplete()) continue;
+        if (rect && img == rect) continue;
+        return img;
+    }
+
+    return ImagePtr();
+}
+
+bool BBBDriver::ValidateSetHasRectDisp(const Spinnaker::ImageList& set)
+{
+    Spinnaker::ImagePtr disp = FindDisparity(set);
+    Spinnaker::ImagePtr rect = FindRectified(set);
+
+    if (!disp || !rect)
+    {
+        DumpSetInfo(set, "Validate FAIL no encuentro rect o disp");
+        return false;
+    }
+    if (disp->IsIncomplete() || rect->IsIncomplete())
+    {
+        DumpSetInfo(set, "Validate FAIL incomplete");
+        return false;
+    }
+    if (!disp->GetData() || !rect->GetData())
+    {
+        DumpSetInfo(set, "Validate FAIL sin data");
+        return false;
+    }
+
     return true;
 }
+
 
 // ARR clamp roi en porcentajes
 void BBBDriver::ClampRoiXY(const BBBParams& p, int w, int h, int& x0, int& x1, int& y0, int& y1)
@@ -395,47 +552,33 @@ void BBBDriver::ClampRoiXY(const BBBParams& p, int w, int h, int& x0, int& x1, i
 bool BBBDriver::OpenBySerial(CameraList& cams, const std::string& serial)
 {
     Close();
+
     if (serial.empty()) return false;
     if (cams.GetSize() == 0) return false;
-
-    // IMPORTANTE
-    // Antes teniamos un bug gordo
-    // Cada vez que buscabamos una camara por serial inicializabamos TODAS y luego haciamos DeInit() a las que no eran
-    // En multi-camara eso desinicializa la camara que ya habiamos abierto en otro BBBDriver -> BeginAcquisition [-1002]
-    // Solucion
-    // Leemos el serial por TLDevice sin tocar Init/DeInit, y solo inicializamos la camara objetivo
 
     for (unsigned int i = 0; i < cams.GetSize(); ++i)
     {
         CameraPtr c = cams.GetByIndex(i);
-        std::string s;
 
-        try
-        {
-            s = c->TLDevice.DeviceSerialNumber.ToString().c_str();
-        }
+        // leemos serial sin Init para no tocar otras camaras
+        std::string s;
+        try { s = c->TLDevice.DeviceSerialNumber.ToString().c_str(); }
         catch (...) { continue; }
 
         if (s != serial) continue;
 
-        try
-        {
-            c->Init();
-        }
+        try { c->Init(); }
         catch (Spinnaker::Exception& e)
         {
-            std::cout << "Init fallo " << e.what() << "\n";
+            std::cout << "Init fallo Spinnaker: " << e.what() << "\n";
             return false;
         }
 
-        bool isStereo = false;
-        try
-        {
-            isStereo = ImageUtilityStereo::IsStereoCamera(c);
-        }
-        catch (...) { isStereo = false; }
+        bool okStereo = false;
+        try { okStereo = ImageUtilityStereo::IsStereoCamera(c); }
+        catch (...) { okStereo = false; }
 
-        if (!isStereo)
+        if (!okStereo)
         {
             try { c->DeInit(); }
             catch (...) {}
@@ -443,6 +586,7 @@ bool BBBDriver::OpenBySerial(CameraList& cams, const std::string& serial)
         }
 
         cam = c;
+        acquiring = false;
         return true;
     }
 
@@ -450,6 +594,7 @@ bool BBBDriver::OpenBySerial(CameraList& cams, const std::string& serial)
 }
 
 // TELEDYNE abrimos primera estereo saltando serial
+
 bool BBBDriver::OpenFirstStereoSkip(CameraList& cams, const std::string& serialToSkip)
 {
     Close();
@@ -466,10 +611,7 @@ bool BBBDriver::OpenFirstStereoSkip(CameraList& cams, const std::string& serialT
         if (!serialToSkip.empty() && s == serialToSkip)
             continue;
 
-        try
-        {
-            c->Init();
-        }
+        try { c->Init(); }
         catch (...) { continue; }
 
         bool okStereo = false;
@@ -479,6 +621,7 @@ bool BBBDriver::OpenFirstStereoSkip(CameraList& cams, const std::string& serialT
         if (okStereo)
         {
             cam = c;
+            acquiring = false;
             return true;
         }
 
@@ -489,7 +632,8 @@ bool BBBDriver::OpenFirstStereoSkip(CameraList& cams, const std::string& serialT
     return false;
 }
 
-void BBBDriver::Close()
+void BBBDriver::Close
+()
 {
     try
     {
@@ -528,37 +672,30 @@ bool BBBDriver::ConfigureStreams_Rectified1_Disparity()
 {
     if (!cam) return false;
 
-    try
+    INodeMap& nodeMap = cam->GetNodeMap();
+
+    CEnumerationPtr sourceSel = nodeMap.GetNode("SourceSelector");
+    CEnumerationPtr compSel = nodeMap.GetNode("ComponentSelector");
+    CBooleanPtr compEnable = nodeMap.GetNode("ComponentEnable");
+
+    const bool hasSourceSel = IsReadable(sourceSel) && IsWritable(sourceSel);
+    if (!hasSourceSel)
+        std::cout << "SourceSelector no accesible\n";
+
+    if (!IsReadable(compSel) || !IsWritable(compSel)) return false;
+    if (!IsReadable(compEnable) || !IsWritable(compEnable)) return false;
+
+    // si existe selector de sensor, intentamos fijarlo pero no es obligatorio en todos los modelos
+    if (hasSourceSel)
     {
-        INodeMap& nodeMap = cam->GetNodeMap();
-
-        CEnumerationPtr sourceSel = nodeMap.GetNode("SourceSelector");
-        CEnumerationPtr compSel = nodeMap.GetNode("ComponentSelector");
-        CBooleanPtr compEnable = nodeMap.GetNode("ComponentEnable");
-
-        if (!IsReadable(sourceSel) || !IsWritable(sourceSel))
-        {
-            std::cout << "SourceSelector no accesible\n";
-            return false;
-        }
-        if (!IsReadable(compSel) || !IsWritable(compSel))
-        {
-            std::cout << "ComponentSelector no accesible\n";
-            return false;
-        }
-        if (!IsReadable(compEnable) || !IsWritable(compEnable))
-        {
-            std::cout << "ComponentEnable no accesible\n";
-            return false;
-        }
-
         const char* sensors[] = { "Sensor1", "Sensor0" };
         if (!TrySetEnumAny(nodeMap, "SourceSelector", sensors, 2))
-        {
-            std::cout << "No pude setear SourceSelector Sensor1/Sensor0\n";
-            return false;
-        }
+            std::cout << "SourceSelector no pude fijar sensor\n";
+    }
 
+    // deshabilitamos todos los componentes primero
+    try
+    {
         NodeList_t entries;
         compSel->GetEntries(entries);
         for (auto& n : entries)
@@ -568,56 +705,52 @@ bool BBBDriver::ConfigureStreams_Rectified1_Disparity()
             compSel->SetIntValue(e->GetValue());
             compEnable->SetValue(false);
         }
-
-        const char* rectNames[] = { "Rectified" };
-        if (!TrySetEnumAny(nodeMap, "ComponentSelector", rectNames, 1))
-        {
-            std::cout << "No existe ComponentSelector=Rectified\n";
-            return false;
-        }
-        compEnable->SetValue(true);
-
-        const char* dispNames[] = { "Disparity" };
-        if (!TrySetEnumAny(nodeMap, "ComponentSelector", dispNames, 1))
-        {
-            std::cout << "No existe ComponentSelector=Disparity\n";
-            return false;
-        }
-        compEnable->SetValue(true);
-
-        return true;
     }
-    catch (Spinnaker::Exception& e)
-    {
-        std::cout << "ConfigureStreams fallo " << e.what() << "\n";
-        return false;
-    }
+    catch (...) {}
+
+    // habilitamos Rectified y Disparity
+    const char* rectNames[] = { "Rectified" };
+    if (!TrySetEnumAny(nodeMap, "ComponentSelector", rectNames, 1)) return false;
+    compEnable->SetValue(true);
+
+    const char* dispNames[] = { "Disparity" };
+    if (!TrySetEnumAny(nodeMap, "ComponentSelector", dispNames, 1)) return false;
+    compEnable->SetValue(true);
+
+    return true;
 }
+
 
 // TELEDYNE trigger software con nodos oficiales
 bool BBBDriver::ConfigureSoftwareTrigger()
 {
     if (!cam) return false;
 
-    try
+    INodeMap& nodeMap = cam->GetNodeMap();
+
+    // ponemos modo continuo siempre
+    if (!SetEnumAsString(nodeMap, "AcquisitionMode", "Continuous"))
+        std::cout << "AcquisitionMode Continuous FAIL\n";
+
+    // trigger es opcional en algunos modelos, si no existe no reventamos
+    bool ok = true;
+
+    if (!SetEnumAsString(nodeMap, "TriggerMode", "Off"))
     {
-        INodeMap& nodeMap = cam->GetNodeMap();
-
-        SetEnumAsString(nodeMap, "AcquisitionMode", "Continuous");
-
-        if (!SetEnumAsString(nodeMap, "TriggerMode", "Off")) { std::cout << "TriggerMode Off FAIL\n"; return false; }
-        if (!SetEnumAsString(nodeMap, "TriggerSelector", "FrameStart")) { std::cout << "TriggerSelector FrameStart FAIL\n"; return false; }
-        if (!SetEnumAsString(nodeMap, "TriggerSource", "Software")) { std::cout << "TriggerSource Software FAIL\n"; return false; }
-        if (!SetEnumAsString(nodeMap, "TriggerMode", "On")) { std::cout << "TriggerMode On FAIL\n"; return false; }
-
-        return true;
+        std::cout << "TriggerMode Off FAIL\n";
+        ok = false;
     }
-    catch (Spinnaker::Exception& e)
-    {
-        std::cout << "ConfigureSoftwareTrigger fallo " << e.what() << "\n";
-        return false;
-    }
+
+    // intentamos configurar trigger software pero no es obligatorio para capturar en continuo
+    if (!SetEnumAsString(nodeMap, "TriggerSelector", "FrameStart"))
+        ok = false;
+    if (!SetEnumAsString(nodeMap, "TriggerSource", "Software"))
+        ok = false;
+
+    // devolvemos true siempre para que el programa siga, aunque el trigger no sea compatible
+    return true;
 }
+
 
 // TELEDYNE stream buffer mode oficial
 bool BBBDriver::ConfigureStreamBuffersNewestOnly()
@@ -639,26 +772,18 @@ bool BBBDriver::ReadScan3DParams(Scan3DParams& out)
 {
     if (!cam) return false;
 
-    try
-    {
-        INodeMap& nodeMap = cam->GetNodeMap();
+    INodeMap& nodeMap = cam->GetNodeMap();
 
-        if (!GetFloatNode(nodeMap, "Scan3dCoordinateScale", out.scale)) return false;
-        if (!GetFloatNode(nodeMap, "Scan3dCoordinateOffset", out.offset)) return false;
-        if (!GetFloatNode(nodeMap, "Scan3dFocalLength", out.focal)) return false;
-        if (!GetFloatNode(nodeMap, "Scan3dBaseline", out.baseline)) return false;
-        if (!GetFloatNode(nodeMap, "Scan3dPrincipalPointU", out.principalU)) return false;
-        if (!GetFloatNode(nodeMap, "Scan3dPrincipalPointV", out.principalV)) return false;
-        if (!GetBoolNode(nodeMap, "Scan3dInvalidDataFlag", out.invalidFlag)) return false;
-        if (!GetFloatNode(nodeMap, "Scan3dInvalidDataValue", out.invalidValue)) return false;
+    if (!GetFloatNode(nodeMap, "Scan3dCoordinateScale", out.scale)) return false;
+    if (!GetFloatNode(nodeMap, "Scan3dCoordinateOffset", out.offset)) return false;
+    if (!GetFloatNode(nodeMap, "Scan3dFocalLength", out.focal)) return false;
+    if (!GetFloatNode(nodeMap, "Scan3dBaseline", out.baseline)) return false;
+    if (!GetFloatNode(nodeMap, "Scan3dPrincipalPointU", out.principalU)) return false;
+    if (!GetFloatNode(nodeMap, "Scan3dPrincipalPointV", out.principalV)) return false;
+    if (!GetBoolNode(nodeMap, "Scan3dInvalidDataFlag", out.invalidFlag)) return false;
+    if (!GetFloatNode(nodeMap, "Scan3dInvalidDataValue", out.invalidValue)) return false;
 
-        return true;
-    }
-    catch (Spinnaker::Exception& e)
-    {
-        std::cout << "ReadScan3DParams fallo " << e.what() << "\n";
-        return false;
-    }
+    return true;
 }
 
 // TELEDYNE BeginAcquisition y EndAcquisition oficiales
@@ -764,7 +889,7 @@ static bool SavePGM16_BE(const ImagePtr& img, const std::string& filePath)
 
 bool BBBDriver::SaveDisparityPGM(const ImageList& set, const std::string& filePath)
 {
-    ImagePtr disp = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_DISPARITY_SENSOR1);
+    ImagePtr disp = FindDisparity(set);
     if (!disp) return false;
     if (disp->IsIncomplete()) return false;
     if (!disp->GetData()) return false;
@@ -781,7 +906,7 @@ bool BBBDriver::SaveDisparityPGM(const ImageList& set, const std::string& filePa
 // TELEDYNE ImagePtr Save es oficial
 bool BBBDriver::SaveRectifiedPNG(const ImageList& set, const std::string& filePath)
 {
-    ImagePtr rect = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_RECTIFIED_SENSOR1);
+    ImagePtr rect = FindRectified(set);
     if (!rect || rect->IsIncomplete()) return false;
 
     try
@@ -803,8 +928,8 @@ bool BBBDriver::SavePointCloudPLY_Filtered(
     const BBBCameraMount& mount,
     const std::string& filePath)
 {
-    ImagePtr disp = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_DISPARITY_SENSOR1);
-    ImagePtr rect = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_RECTIFIED_SENSOR1);
+    ImagePtr disp = FindDisparity(set);
+    ImagePtr rect = FindRectified(set);
 
     if (!disp || disp->IsIncomplete() || !disp->GetData()) return false;
 
@@ -1177,7 +1302,7 @@ bool BBBDriver::SavePointCloudPLY_Filtered(
 
 bool BBBDriver::GetDistanceCentralPointM(const ImageList& set, const Scan3DParams& s3d, float& outMeters)
 {
-    ImagePtr disp = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_DISPARITY_SENSOR1);
+    ImagePtr disp = FindDisparity(set);
     if (!disp || disp->IsIncomplete() || !disp->GetData()) return false;
 
     const int w = (int)disp->GetWidth();
@@ -1223,7 +1348,7 @@ bool BBBDriver::GetDistanceToBultoM_Debug(
 {
     outUsedPoints = 0;
 
-    ImagePtr disp = set.GetByPayloadType(SPINNAKER_IMAGE_PAYLOAD_TYPE_DISPARITY_SENSOR1);
+    ImagePtr disp = FindDisparity(set);
     if (!disp || disp->IsIncomplete() || !disp->GetData()) return false;
 
     const int w = (int)disp->GetWidth();
