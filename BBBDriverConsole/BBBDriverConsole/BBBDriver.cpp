@@ -713,6 +713,12 @@ bool BBBDriver::ConfigureStreams_Rectified1_Disparity()
     if (!TrySetEnumAny(nodeMap, "ComponentSelector", rectNames, 1)) return false;
     compEnable->SetValue(true);
 
+    // ARR intentamos sacar Rectified en color real para colorear el PLY con la escena
+    // ARR si la camara no soporta color en Rectified, nos quedamos con el formato que tenga
+    const char* pfTry[] = { "RGB8Packed", "RGB8", "BGR8Packed", "BGR8", "Mono8" };
+    if (!TrySetEnumAny(nodeMap, "PixelFormat", pfTry, 5))
+        std::cout << "PixelFormat en Rectified no se pudo fijar\n";
+
     const char* dispNames[] = { "Disparity" };
     if (!TrySetEnumAny(nodeMap, "ComponentSelector", dispNames, 1)) return false;
     compEnable->SetValue(true);
@@ -958,10 +964,13 @@ bool BBBDriver::SavePointCloudPLY_Filtered(
 
     const uint8_t* rectData = nullptr;
     int rectStride = 0;
-    if (rect && !rect->IsIncomplete() && rect->GetData() && rect->GetBitsPerPixel() == 8)
+    unsigned int rectBpp = 0;
+
+    if (rect && !rect->IsIncomplete() && rect->GetData())
     {
         rectData = (const uint8_t*)rect->GetData();
         rectStride = (int)rect->GetStride();
+        rectBpp = rect->GetBitsPerPixel();
     }
 
     const unsigned int bpp = disp->GetBitsPerPixel();
@@ -1055,7 +1064,7 @@ bool BBBDriver::SavePointCloudPLY_Filtered(
             float X = ((float)x - s3d.principalU) * z / focal;
             float Y = ((float)y - s3d.principalV) * z / focal;
 
-            // filtro geometrico suelo (si está activo)
+            // filtro geometrico suelo (si estÃ¡ activo)
             if (p.enableGroundPlaneFilter)
             {
                 float hAG = HeightAboveGroundM(X, Y, z, mount.alturaCamaraM, mount.pitchDeg);
@@ -1065,14 +1074,43 @@ bool BBBDriver::SavePointCloudPLY_Filtered(
 
             uint8_t R = 180, G = 180, B = 180;
 
+            // ARR colorMode
+            // ARR 0 gris fijo
+            // ARR 1 gris de rectified
+            // ARR 2 heatmap por profundidad
+            // ARR 3 color real de rectified si hay RGB y si no tiramos a gris
+
             if (p.colorMode == 2)
             {
                 DepthToHeatRGB(z, p.minRangeM, zMaxUse, R, G, B);
             }
-            else if (p.colorMode == 1 && rectData && rectStride > 0)
+            else if ((p.colorMode == 1 || p.colorMode == 3) && rectData && rectStride > 0)
             {
-                uint8_t g = rectData[y * rectStride + x];
-                R = g; G = g; B = g;
+                if (rectBpp == 24)
+                {
+                    const int off = y * rectStride + x * 3;
+                    const uint8_t* px = rectData + off;
+
+                    // ARR cuando fijamos PixelFormat a RGB8Packed el orden es R G B
+                    uint8_t r0 = px[0];
+                    uint8_t g0 = px[1];
+                    uint8_t b0 = px[2];
+
+                    if (p.colorMode == 1)
+                    {
+                        uint8_t g = (uint8_t)(((int)r0 + (int)g0 + (int)b0) / 3);
+                        R = g; G = g; B = g;
+                    }
+                    else
+                    {
+                        R = r0; G = g0; B = b0;
+                    }
+                }
+                else if (rectBpp == 8)
+                {
+                    uint8_t g = rectData[y * rectStride + x];
+                    R = g; G = g; B = g;
+                }
             }
 
             Pt q;

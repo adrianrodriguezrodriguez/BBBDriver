@@ -81,6 +81,10 @@ struct CameraConfig
     std::string serial;
     std::string name;
 
+    // ARR orientacion logica para rutas y nombres izq der cenital
+    // ARR lo leemos del INI como orient y por compatibilidad side
+    std::string orient;
+
     BBBCameraMount mount;
     BBBParams params;
     BBBControl control;

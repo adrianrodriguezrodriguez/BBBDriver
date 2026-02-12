@@ -10,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <utility>
+#include <cctype>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -78,12 +79,10 @@ static void ReleaseImageList(Spinnaker::ImageList& set)
     }
 }
 
-static void EnsureDirs(const BBBPaths& paths)
+static void EnsureBaseDir(const BBBPaths& paths)
 {
     std::filesystem::path base(paths.outputDir);
-    std::filesystem::create_directories(base / paths.dirPNG);
-    std::filesystem::create_directories(base / paths.dirPGM);
-    std::filesystem::create_directories(base / paths.dirPLY);
+    std::filesystem::create_directories(base);
 }
 
 static std::string SanitizeFileTag(std::string s)
@@ -99,6 +98,76 @@ static std::string SanitizeFileTag(std::string s)
     }
     if (s.empty()) s = "BBB";
     return s;
+}
+
+static std::string ToLowerSimple(std::string s)
+{
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+static std::string TrimSimple(std::string s)
+{
+    auto isspace2 = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!s.empty() && isspace2((unsigned char)s.front())) s.erase(s.begin());
+    while (!s.empty() && isspace2((unsigned char)s.back())) s.pop_back();
+    return s;
+}
+
+static std::string NormalizeOrient(std::string s)
+{
+    s = ToLowerSimple(TrimSimple(s));
+
+    if (s == "izq" || s == "izquierda" || s == "left") return "izq";
+    if (s == "der" || s == "derecha" || s == "right") return "der";
+    if (s == "cen" || s == "cenital" || s == "top") return "cenital";
+
+    if (s.empty()) return "";
+    return SanitizeFileTag(s);
+}
+
+// ARR construimos prefijo BBB + serial + orientacion
+static std::string MakeCamPrefix(const BBBAppConfig& cfg, const CameraConfig& c, int index0Based)
+{
+    std::string baseName;
+
+    // ARR si hay serial siempre lo usamos
+    if (!c.serial.empty())
+        baseName = cfg.namePrefix + c.serial;
+    else if (!c.name.empty())
+        baseName = c.name;
+    else
+        baseName = cfg.namePrefix + std::string("UNASSIGNED") + std::to_string(index0Based + 1);
+
+    std::string o = NormalizeOrient(c.orient);
+    if (o.empty())
+    {
+        if (index0Based == 0) o = "izq";
+        else if (index0Based == 1) o = "der";
+        else o = "cenital";
+    }
+
+    return SanitizeFileTag(baseName + "_" + o);
+}
+
+// ARR estructura final
+// ARR outputDir/BBBserial_orient/PNG ...
+// ARR outputDir/BBBserial_orient/PGM ...
+// ARR outputDir/BBBserial_orient/PLY ...
+static void EnsureCamDirs(const BBBAppConfig& cfg)
+{
+    std::filesystem::path base(cfg.paths.outputDir);
+
+    for (int i = 0; i < (int)cfg.cameras.size(); ++i)
+    {
+        const auto& c = cfg.cameras[i];
+        std::string prefix = MakeCamPrefix(cfg, c, i);
+
+        std::filesystem::path camBase = base / prefix;
+        std::filesystem::create_directories(camBase / cfg.paths.dirPNG);
+        std::filesystem::create_directories(camBase / cfg.paths.dirPGM);
+        std::filesystem::create_directories(camBase / cfg.paths.dirPLY);
+    }
 }
 
 static void ApplyControl(BBBDriver& d, const BBBControl& c)
@@ -155,7 +224,8 @@ static std::vector<std::string> DetectStereoSerials(Spinnaker::CameraList& cams)
 
 int main()
 {
-    std::cout << "=== BBBDriverConsole BBB Spinnaker hasta 3 camaras ===\n\n";
+    std::cout << "=== BBBDriverConsole BBB Spinnaker hasta 3 camaras ===\n";
+    std::cout << "Guardado por camara en outputDir/BBBserial_orient/PNG PGM PLY\n\n";
 
     const std::string iniName = "bbb_config.ini";
 
@@ -173,7 +243,6 @@ int main()
     if (!BBBConfig::LoadIni(iniPath.string(), cfg))
     {
         std::cout << "INI no existe o no se pudo leer, lo creo en " << iniPath.string() << "\n";
-        // tiramos con defaults y guardamos para que el usuario lo edite
         BBBConfig::SaveIni(iniPath.string(), cfg);
     }
 
@@ -183,7 +252,7 @@ int main()
     if (cfg.paths.outputDir.empty() || cfg.paths.outputDir == ".")
         cfg.paths.outputDir = exeDir.string();
 
-    EnsureDirs(cfg.paths);
+    EnsureBaseDir(cfg.paths);
 
     Spinnaker::SystemPtr system = Spinnaker::System::GetInstance();
     Spinnaker::CameraList cams = system->GetCameras();
@@ -213,6 +282,8 @@ int main()
         std::cout << "INI actualizado al detectar camaras\n";
     }
 
+    EnsureCamDirs(cfg);
+
     // ARR abrimos cada Camera.0..2 una vez sin serial duplicado
     std::vector<ActiveCam> act;
     act.reserve((size_t)cfg.maxCameras);
@@ -233,7 +304,6 @@ int main()
 
         if (c.serial.empty())
         {
-            // ARR dejamos el hueco preparado para cuando se conecte la tercera
             if (c.name.empty() && cfg.autoNameFromSerial)
                 c.name = BBBConfig::MakeAutoName(cfg, "", i + 1);
 
@@ -311,9 +381,6 @@ int main()
 
         const std::string tag = NowTag();
         std::filesystem::path base(cfg.paths.outputDir);
-        std::filesystem::path dirPNG = base / cfg.paths.dirPNG;
-        std::filesystem::path dirPGM = base / cfg.paths.dirPGM;
-        std::filesystem::path dirPLY = base / cfg.paths.dirPLY;
 
         if (opt == "5")
         {
@@ -354,9 +421,8 @@ int main()
                 continue;
             }
 
-            // ARR aqui edits como ya tenias si quieres mantenerlos
             std::cout << "Editando parametros de " << act[idx].cfg->name << " en INI\n";
-            std::cout << "Hazlo editando el bbb_config.ini que es lo que quieres centralizado\n";
+            std::cout << "Hacemos los cambios editando el bbb_config.ini\n";
 
             BBBConfig::SaveIni(iniPath.string(), cfg);
             continue;
@@ -374,15 +440,27 @@ int main()
                     return;
                 }
 
-                std::string camTag = SanitizeFileTag(a.cfg->name);
+                int camIndex = (int)(a.cfg - cfg.cameras.data());
+                if (camIndex < 0 || camIndex >= (int)cfg.cameras.size()) camIndex = 0;
+
+                std::string camPrefix = MakeCamPrefix(cfg, *a.cfg, camIndex);
+
+                std::filesystem::path camBase = base / camPrefix;
+                std::filesystem::path camDirPNG = camBase / cfg.paths.dirPNG;
+                std::filesystem::path camDirPGM = camBase / cfg.paths.dirPGM;
+                std::filesystem::path camDirPLY = camBase / cfg.paths.dirPLY;
+
+                std::filesystem::create_directories(camDirPNG);
+                std::filesystem::create_directories(camDirPGM);
+                std::filesystem::create_directories(camDirPLY);
 
                 if (opt == "1")
                 {
-                    std::string fDisp = camTag + "_disparity_" + tag + ".pgm";
-                    std::string fRect = camTag + "_rectified_" + tag + ".png";
+                    std::string fDisp = camPrefix + "_disparity_" + tag + ".pgm";
+                    std::string fRect = camPrefix + "_rectified_" + tag + ".png";
 
-                    auto pDisp = (dirPGM / fDisp).string();
-                    auto pRect = (dirPNG / fRect).string();
+                    auto pDisp = (camDirPGM / fDisp).string();
+                    auto pRect = (camDirPNG / fRect).string();
 
                     bool okDisp = a.drv.SaveDisparityPGM(set, pDisp);
                     bool okRect = a.drv.SaveRectifiedPNG(set, pRect);
@@ -395,8 +473,8 @@ int main()
                 {
                     a.drv.ReadScan3DParams(a.s3d);
 
-                    std::string fPly = camTag + "_cloud_" + tag + ".ply";
-                    auto pPly = (dirPLY / fPly).string();
+                    std::string fPly = camPrefix + "_cloud_" + tag + ".ply";
+                    auto pPly = (camDirPLY / fPly).string();
 
                     std::cout << "\n--- " << a.cfg->name << " Generar PLY filtrado ---\n";
                     if (a.drv.SavePointCloudPLY_Filtered(set, a.s3d, a.cfg->params, a.cfg->mount, pPly))

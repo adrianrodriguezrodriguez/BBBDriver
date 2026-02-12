@@ -1,0 +1,35 @@
+=== DATE ===
+mié 11 feb 2026 14:47:25 CET
+=== PWD ===
+/home/inesarc001/Proyectos/BBBDriver/BBBDriverConsole/BBBDriverConsole/build
+=== FILES ===
+total 328
+drwxrwxr-x 6 inesarc001 inesarc001   4096 feb 11 14:44 .
+drwxr-xr-x 3 inesarc001 inesarc001   4096 feb 11 12:25 ..
+-rw-rw-r-- 1 inesarc001 inesarc001   3094 feb 11 12:26 bbb_config.ini
+-rwxrwxr-x 1 inesarc001 inesarc001 271624 feb 11 12:25 BBBDriverConsole
+-rw-rw-r-- 1 inesarc001 inesarc001  12443 feb 11 12:25 CMakeCache.txt
+drwxrwxr-x 5 inesarc001 inesarc001   4096 feb 11 14:44 CMakeFiles
+-rw-rw-r-- 1 inesarc001 inesarc001   1723 feb 11 12:25 cmake_install.cmake
+-rw-rw-r-- 1 inesarc001 inesarc001  10607 feb 11 14:44 Makefile
+drwxrwxr-x 2 inesarc001 inesarc001   4096 feb 11 12:26 PGM
+drwxrwxr-x 2 inesarc001 inesarc001   4096 feb 11 12:26 PLY
+drwxrwxr-x 2 inesarc001 inesarc001   4096 feb 11 12:26 PNG
+=== IP ===
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+enp10s0          DOWN           
+enp11s0          DOWN           
+enp0s31f6        UP             192.168.1.169/24 fe80::5197:456a:5588:f4be/64 
+enp5s0           UP             192.168.10.1/24 fe80::7ad0:4ff:fe38:b87d/64 
+enp6s0           UP             192.168.11.1/24 169.254.1.1/16 fe80::7ad0:4ff:fe38:b87e/64 
+enp7s0           DOWN           
+enp8s0           DOWN           
+=== ROUTE ===
+default via 192.168.1.1 dev enp0s31f6 proto dhcp metric 100 
+169.254.0.0/16 dev enp6s0 proto kernel scope link src 169.254.1.1 
+169.254.0.0/16 dev enp6s0 scope link metric 50 
+169.254.0.0/16 dev enp0s31f6 scope link metric 1000 
+192.168.1.0/24 dev enp0s31f6 proto kernel scope link src 192.168.1.169 metric 100 
+192.168.10.0/24 dev enp5s0 proto kernel scope link src 192.168.10.1 metric 102 
+192.168.11.0/24 dev enp6s0 proto kernel scope link src 192.168.11.1 metric 103 
+=== UFW ===

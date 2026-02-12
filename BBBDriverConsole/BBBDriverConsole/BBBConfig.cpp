@@ -2,9 +2,9 @@
 #include <fstream>
 #include <unordered_map>
 #include <algorithm>
-#include <utility> // ARR std::move
-
+#include <utility>
 #include <cctype>
+#include <cmath>
 
 static inline std::string Trim(std::string s)
 {
@@ -18,6 +18,71 @@ static inline std::string ToLower(std::string s)
 {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
     return s;
+}
+
+static std::string DefaultOrientForIndex(int index0Based)
+{
+    if (index0Based == 0) return "izq";
+    if (index0Based == 1) return "der";
+    return "cenital";
+}
+
+static std::string CanonicalOrient(std::string s)
+{
+    s = ToLower(Trim(std::move(s)));
+    if (s == "izq" || s == "izquierda" || s == "left") return "izq";
+    if (s == "der" || s == "derecha" || s == "right") return "der";
+    if (s == "cen" || s == "cenital" || s == "top") return "cenital";
+    return s;
+}
+
+static bool NearlyEqualF(float a, float b, float eps = 1e-6f)
+{
+    float da = std::fabs(a - b);
+    float m = (std::max)(1.0f, (std::max)(std::fabs(a), std::fabs(b)));
+    return da <= eps * m;
+}
+
+static bool ControlEqual(const BBBControl& a, const BBBControl& b)
+{
+    return std::fabs(a.exposureUs - b.exposureUs) <= 1e-6 &&
+           std::fabs(a.gainDb - b.gainDb) <= 1e-6;
+}
+
+static bool ParamsEqual(const BBBParams& a, const BBBParams& b)
+{
+    return
+        NearlyEqualF(a.minRangeM, b.minRangeM) &&
+        NearlyEqualF(a.maxRangeM, b.maxRangeM) &&
+        a.roiMinXPct == b.roiMinXPct &&
+        a.roiMaxXPct == b.roiMaxXPct &&
+        a.roiMinYPct == b.roiMinYPct &&
+        a.roiMaxYPct == b.roiMaxYPct &&
+        a.decimationFactor == b.decimationFactor &&
+        a.applySpeckleFilter == b.applySpeckleFilter &&
+        a.maxSpeckleSize == b.maxSpeckleSize &&
+        a.speckleThreshold == b.speckleThreshold &&
+        a.applyMedian3x3 == b.applyMedian3x3 &&
+        NearlyEqualF(a.voxelLeafM, b.voxelLeafM) &&
+        NearlyEqualF(a.outlierRadiusM, b.outlierRadiusM) &&
+        a.outlierMinNeighbors == b.outlierMinNeighbors &&
+        a.keepLargestCluster == b.keepLargestCluster &&
+        a.enableGroundPlaneFilter == b.enableGroundPlaneFilter &&
+        NearlyEqualF(a.groundBandPct, b.groundBandPct) &&
+        NearlyEqualF(a.groundRansacThrM, b.groundRansacThrM) &&
+        a.groundRansacIters == b.groundRansacIters &&
+        NearlyEqualF(a.groundCutMarginM, b.groundCutMarginM) &&
+        a.enableFrontDepthClamp == b.enableFrontDepthClamp &&
+        NearlyEqualF(a.frontFacePercentile, b.frontFacePercentile) &&
+        NearlyEqualF(a.frontDepthBandM, b.frontDepthBandM) &&
+        NearlyEqualF(a.faceSlabM, b.faceSlabM) &&
+        NearlyEqualF(a.dimPercentileLow, b.dimPercentileLow) &&
+        NearlyEqualF(a.dimPercentileHigh, b.dimPercentileHigh) &&
+        a.colorMode == b.colorMode &&
+        a.plyBinary == b.plyBinary &&
+        NearlyEqualF(a.hardMaxZM, b.hardMaxZM) &&
+        NearlyEqualF(a.groundMinHeightM, b.groundMinHeightM) &&
+        NearlyEqualF(a.bultoFacePercentile, b.bultoFacePercentile);
 }
 
 static bool ParseIni(const std::string& path, std::unordered_map<std::string, std::string>& kv)
@@ -180,6 +245,7 @@ static void WriteSection(std::ofstream& f, const std::string& name)
 {
     f << "[" << name << "]\n";
 }
+
 static void WriteKV(std::ofstream& f, const std::string& k, const std::string& v) { f << k << "=" << v << "\n"; }
 static void WriteKV(std::ofstream& f, const std::string& k, int v) { f << k << "=" << v << "\n"; }
 static void WriteKV(std::ofstream& f, const std::string& k, uint64_t v) { f << k << "=" << v << "\n"; }
@@ -289,9 +355,12 @@ bool BBBConfig::LoadIni(const std::string& iniPath, BBBAppConfig& out)
         bool hasAny =
             HasKey(kv, base + ".serial") ||
             HasKey(kv, base + ".name") ||
-            HasKey(kv, base + ".enabled");
+            HasKey(kv, base + ".enabled") ||
+            HasKey(kv, base + ".orient") ||
+            HasKey(kv, base + ".side");
 
         CameraConfig c;
+        c.orient = DefaultOrientForIndex(i);
         c.mount = out.defaultMount;
         c.params = out.defaultParams;
         c.control = out.defaultControl;
@@ -302,6 +371,12 @@ bool BBBConfig::LoadIni(const std::string& iniPath, BBBAppConfig& out)
             GetStr(kv, base + ".serial", c.serial);
             GetStr(kv, base + ".name", c.name);
 
+            // ARR preferimos orient y aceptamos side por compatibilidad
+            if (!GetStr(kv, base + ".orient", c.orient))
+                GetStr(kv, base + ".side", c.orient);
+
+            c.orient = CanonicalOrient(c.orient);
+
             LoadMount(kv, base, c.mount);
             LoadParams(kv, base + ".params", c.params);
             LoadControl(kv, base + ".control", c.control);
@@ -310,6 +385,9 @@ bool BBBConfig::LoadIni(const std::string& iniPath, BBBAppConfig& out)
         {
             c.enabled = true;
         }
+
+        if (c.orient.empty())
+            c.orient = DefaultOrientForIndex(i);
 
         if (c.name.empty() && out.autoNameFromSerial)
             c.name = MakeAutoName(out, c.serial, i + 1);
@@ -340,6 +418,7 @@ bool BBBConfig::SaveIni(const std::string& iniPath, const BBBAppConfig& cfgIn)
             c.mount = cfg.defaultMount;
             c.params = cfg.defaultParams;
             c.control = cfg.defaultControl;
+            c.orient = DefaultOrientForIndex((int)cfg.cameras.size());
             c.name = MakeAutoName(cfg, "", (int)cfg.cameras.size() + 1);
             cfg.cameras.push_back(c);
         }
@@ -378,6 +457,9 @@ bool BBBConfig::SaveIni(const std::string& iniPath, const BBBAppConfig& cfgIn)
     {
         CameraConfig c = cfg.cameras[i];
 
+        if (c.orient.empty()) c.orient = DefaultOrientForIndex(i);
+        c.orient = CanonicalOrient(c.orient);
+
         if (c.name.empty() && cfg.autoNameFromSerial)
             c.name = MakeAutoName(cfg, c.serial, i + 1);
 
@@ -385,16 +467,23 @@ bool BBBConfig::SaveIni(const std::string& iniPath, const BBBAppConfig& cfgIn)
         WriteKV(f, "enabled", c.enabled);
         WriteKV(f, "serial", c.serial);
         WriteKV(f, "name", c.name);
+        WriteKV(f, "orient", c.orient);
         SaveMount(f, c.mount);
         f << "\n";
 
-        WriteSection(f, "Camera." + std::to_string(i) + ".Params");
-        SaveParams(f, c.params);
-        f << "\n";
+        if (!ParamsEqual(c.params, cfg.defaultParams))
+        {
+            WriteSection(f, "Camera." + std::to_string(i) + ".Params");
+            SaveParams(f, c.params);
+            f << "\n";
+        }
 
-        WriteSection(f, "Camera." + std::to_string(i) + ".Control");
-        SaveControl(f, c.control);
-        f << "\n";
+        if (!ControlEqual(c.control, cfg.defaultControl))
+        {
+            WriteSection(f, "Camera." + std::to_string(i) + ".Control");
+            SaveControl(f, c.control);
+            f << "\n";
+        }
     }
 
     return true;
@@ -422,6 +511,7 @@ bool BBBConfig::EnsureDetectedCameras(
             {
                 cfg.cameras[j].serial.clear();
                 cfg.cameras[j].name = MakeAutoName(cfg, "", j + 1);
+                if (cfg.cameras[j].orient.empty()) cfg.cameras[j].orient = DefaultOrientForIndex(j);
                 cfg.cameras[j].enabled = true;
                 outChanged = true;
             }
@@ -458,8 +548,15 @@ bool BBBConfig::EnsureDetectedCameras(
             if (cfg.cameras[i].serial.empty())
             {
                 cfg.cameras[i].serial = s;
+
+                if (cfg.cameras[i].orient.empty())
+                    cfg.cameras[i].orient = DefaultOrientForIndex(i);
+
+                cfg.cameras[i].orient = CanonicalOrient(cfg.cameras[i].orient);
+
                 if (cfg.autoNameFromSerial)
                     cfg.cameras[i].name = MakeAutoName(cfg, s, i + 1);
+
                 outChanged = true;
                 placed = true;
                 break;
@@ -474,6 +571,7 @@ bool BBBConfig::EnsureDetectedCameras(
         CameraConfig c;
         c.enabled = true;
         c.serial = s;
+        c.orient = DefaultOrientForIndex((int)cfg.cameras.size());
         c.mount = cfg.defaultMount;
         c.params = cfg.defaultParams;
         c.control = cfg.defaultControl;
@@ -488,6 +586,7 @@ bool BBBConfig::EnsureDetectedCameras(
     {
         CameraConfig c;
         c.enabled = true;
+        c.orient = DefaultOrientForIndex((int)cfg.cameras.size());
         c.mount = cfg.defaultMount;
         c.params = cfg.defaultParams;
         c.control = cfg.defaultControl;
